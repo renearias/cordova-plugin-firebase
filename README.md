@@ -38,15 +38,15 @@ window.FirebasePlugin.verifyPhoneNumber(number, timeOutDuration, function(creden
 ```
 
 ## Installation
-See npm package for versions - https://www.npmjs.com/package/cordova-plugin-firebase
+See npm package for versions - https://www.npmjs.com/package/cordova-plugin-firebase-plus
 
 Install the plugin by adding it your project's config.xml:
 ```
-<plugin name="cordova-plugin-firebase" spec="0.1.24" />
+<plugin name="cordova-plugin-firebase-plus" spec="0.1.27" />
 ```
 or by running:
 ```
-cordova plugin add cordova-plugin-firebase@0.1.24 --save
+cordova plugin add cordova-plugin-firebase-plus@0.1.27 --save
 ```
 Download your Firebase configuration files, GoogleService-Info.plist for ios and google-services.json for android, and place them in the root folder of your cordova project:
 
