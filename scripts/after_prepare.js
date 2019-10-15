@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 'use strict';
 
 /**
@@ -8,134 +9,115 @@
  */
 var fs = require('fs');
 var path = require('path');
+var Q = require('q');
+var parser = new (require('xml2js')).Parser();
 
-fs.ensureDirSync = function (dir) {
-    if (!fs.existsSync(dir)) {
-        dir.split(path.sep).reduce(function (currentPath, folder) {
-            currentPath += folder + path.sep;
-            if (!fs.existsSync(currentPath)) {
-                fs.mkdirSync(currentPath);
-            }
-            return currentPath;
-        }, '');
-    }
-};
+var utilities = require("./lib/utilities");
 
 var config = fs.readFileSync('config.xml').toString();
-var name = getValue(config, 'name');
+var name = utilities.getValue(config, 'name');
+if (name.includes('&amp;')) {
+    name = name.replace(/&amp;/g, '&');
+}
+var pluginVariables = {};
 
 var IOS_DIR = 'platforms/ios';
 var ANDROID_DIR = 'platforms/android';
+var PLUGIN_ID = 'cordova-plugin-firebasex';
 
 var PLATFORM = {
-    IOS: {
-        dest: [
-            IOS_DIR + '/' + name + '/Resources/GoogleService-Info.plist',
-            IOS_DIR + '/' + name + '/Resources/Resources/GoogleService-Info.plist'
-        ],
-        src: [
-            'GoogleService-Info.plist',
-            IOS_DIR + '/www/GoogleService-Info.plist',
-            'www/GoogleService-Info.plist'
-        ]
-    },
-    ANDROID: {
-        dest: [
-            ANDROID_DIR + '/google-services.json'
-        ],
-        src: [
-            'google-services.json',
-            ANDROID_DIR + '/assets/www/google-services.json',
-            'www/google-services.json'
-        ],
-        stringsXml: ANDROID_DIR + '/res/values/strings.xml'
-    }
+  IOS: {
+    dest: IOS_DIR + '/' + name + '/Resources/GoogleService-Info.plist',
+    src: [
+      'GoogleService-Info.plist',
+      IOS_DIR + '/www/GoogleService-Info.plist',
+      'www/GoogleService-Info.plist'
+    ],
+    appPlist: IOS_DIR + '/' + name + '/'+name+'-Info.plist',
+  },
+  ANDROID: {
+    dest: ANDROID_DIR + '/app/google-services.json',
+    src: [
+      'google-services.json',
+      ANDROID_DIR + '/assets/www/google-services.json',
+      'www/google-services.json',
+      ANDROID_DIR + '/app/src/main/google-services.json'
+    ],
+  }
 };
 
-function updateStringsXml(contents) {
-    var json = JSON.parse(contents);
-    var strings = fs.readFileSync(PLATFORM.ANDROID.stringsXml).toString();
-
-    // strip non-default value
-    strings = strings.replace(new RegExp('<string name="google_app_id">([^\@<]+?)</string>', 'i'), '');
-
-    // strip non-default value
-    strings = strings.replace(new RegExp('<string name="google_api_key">([^\@<]+?)</string>', 'i'), '');
-
-    // strip empty lines
-    strings = strings.replace(new RegExp('(\r\n|\n|\r)[ \t]*(\r\n|\n|\r)', 'gm'), '$1');
-
-    // replace the default value
-    strings = strings.replace(new RegExp('<string name="google_app_id">([^<]+?)</string>', 'i'), '<string name="google_app_id">' + json.client[0].client_info.mobilesdk_app_id + '</string>');
-
-    // replace the default value
-    strings = strings.replace(new RegExp('<string name="google_api_key">([^<]+?)</string>', 'i'), '<string name="google_api_key">' + json.client[0].api_key[0].current_key + '</string>');
-
-    fs.writeFileSync(PLATFORM.ANDROID.stringsXml, strings);
-}
-
-function copyKey(platform, callback) {
-    for (var i = 0; i < platform.src.length; i++) {
-        var file = platform.src[i];
-        if (fileExists(file)) {
-            try {
-                var contents = fs.readFileSync(file).toString();
-
-                try {
-                    platform.dest.forEach(function (destinationPath) {
-                        var folder = destinationPath.substring(0, destinationPath.lastIndexOf('/'));
-                        fs.ensureDirSync(folder);
-                        fs.writeFileSync(destinationPath, contents);
-                    });
-                } catch (e) {
-                    // skip
-                }
-
-                callback && callback(contents);
-            } catch (err) {
-                console.log(err)
+var parsePluginVariables = function(){
+  const deferred = Q.defer();
+  var parseConfigXml = function () {
+    parser.parseString(config, function (err, data) {
+      if (data.widget.platform) {
+        (data.widget.plugin || []).forEach(function (plugin) {
+          (plugin.variable || []).forEach(function (variable) {
+            if((plugin.$.name === PLUGIN_ID || plugin.$.id === PLUGIN_ID) && variable.$.name && variable.$.value){
+              pluginVariables[variable.$.name] = variable.$.value;
             }
+          });
+        });
+        deferred.resolve();
+      }
+    });
+    return deferred.promise;
+  };
 
-            break;
+  var parsePackageJson = function(){
+    const deferred = Q.defer();
+    var packageJSON = JSON.parse(fs.readFileSync('./package.json'));
+    if(packageJSON.cordova && packageJSON.cordova.plugins){
+      for(const pluginId in packageJSON.cordova.plugins){
+        if(pluginId === PLUGIN_ID){
+          for(const varName in packageJSON.cordova.plugins[pluginId]){
+            var varValue = packageJSON.cordova.plugins[pluginId][varName];
+            pluginVariables[varName] = varValue;
+          }
         }
+      }
     }
-}
+    deferred.resolve();
+    return deferred.promise;
+  };
 
-function getValue(config, name) {
-    var value = config.match(new RegExp('<' + name + '>(.*?)</' + name + '>', 'i'));
-    if (value && value[1]) {
-        return value[1]
-    } else {
-        return null
-    }
-}
+  return parseConfigXml().then(parsePackageJson);
+};
 
-function fileExists(path) {
-    try {
-        return fs.statSync(path).isFile();
-    } catch (e) {
-        return false;
-    }
-}
+module.exports = function (context) {
+  const deferred = Q.defer();
 
-function directoryExists(path) {
-    try {
-        return fs.statSync(path).isDirectory();
-    } catch (e) {
-        return false;
-    }
-}
-
-module.exports = function(context) {
   //get platform from the context supplied by cordova
   var platforms = context.opts.platforms;
+
   // Copy key files to their platform specific folders
-  if (platforms.indexOf('ios') !== -1 && directoryExists(IOS_DIR)) {
-    console.log('Preparing Firebase on iOS');
-    copyKey(PLATFORM.IOS);
-  }
-  if (platforms.indexOf('android') !== -1 && directoryExists(ANDROID_DIR)) {
+  if (platforms.indexOf('android') !== -1 && utilities.directoryExists(ANDROID_DIR)) {
     console.log('Preparing Firebase on Android');
-    copyKey(PLATFORM.ANDROID, updateStringsXml)
+    utilities.copyKey(PLATFORM.ANDROID);
   }
+
+  if (platforms.indexOf('ios') !== -1 && utilities.directoryExists(IOS_DIR)) {
+    console.log('Preparing Firebase on iOS');
+    utilities.copyKey(PLATFORM.IOS);
+
+    var helper = require("./ios/helper");
+    helper.getXcodeProjectPath(function(xcodeProjectPath){
+      helper.ensureRunpathSearchPath(context, xcodeProjectPath);
+    });
+
+    parsePluginVariables().then(function(){
+      if(pluginVariables['IOS_STRIP_DEBUG'] && pluginVariables['IOS_STRIP_DEBUG'] === 'true'){
+        helper.stripDebugSymbols();
+      }
+      helper.applyPluginVarsToPlists(PLATFORM.IOS.dest, PLATFORM.IOS.appPlist, pluginVariables);
+
+      deferred.resolve();
+    }).catch(error => {
+      deferred.reject(error);
+    });
+  }else{
+    deferred.resolve();
+  }
+
+  return deferred.promise;
 };
